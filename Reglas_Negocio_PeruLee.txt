@@ -40,12 +40,12 @@ Todos los procedimientos de eliminación ahora devuelven mensajes explicativos
 Se informa al usuario sobre el resultado de las operaciones
 Se manejan los errores de manera apropiada
 
-Para Reservas:
-Una reserva expira después de 7 días si no se reclama
-No se puede reservar un libro que ya se tiene en préstamo
-No se puede tener múltiples reservas activas para el mismo libro
-Las reservas se procesan en orden FIFO (First In, First Out),se respeta el orden de las reservas (primera reserva, primer préstamo)
-Un usuario como máximo puede tener 5 reservas activas.
+Para solicitudes:
+Una solicitud expira después de 1 dia si no se reclama
+No se puede solicitar un libro que ya se tiene en préstamo
+No se puede tener múltiples solicitudes activas para el mismo libro
+Las solicitudes se procesan en orden FIFO (First In, First Out),se respeta el orden de las reservas (primera reserva, primer préstamo)
+Un usuario como máximo puede tener 5 solicitudes activas.
 
 Integridad Referencial:
 

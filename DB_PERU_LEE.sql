@@ -8,7 +8,11 @@ GO
 /********************************************************************************************/
 -- TABLAS 
 /********************************************************************************************/
-
+CREATE TABLE tbl_rol(
+	id_rol INT IDENTITY(1,1) PRIMARY KEY,
+	rol NVARCHAR(10) NOT NULL
+);
+GO
 CREATE TABLE tbl_usuario (
     id_usuario INT IDENTITY(1000,1) PRIMARY KEY,
     nombre NVARCHAR(100) NOT NULL,
@@ -16,7 +20,8 @@ CREATE TABLE tbl_usuario (
     email NVARCHAR(100) UNIQUE NOT NULL,
     contrasena NVARCHAR(7) NOT NULL,
     telefono NVARCHAR(9),
-    rol BIT DEFAULT 0, -- Usuario : 0 , Administrador : 1
+	imagen NVARCHAR(400) DEFAULT 'https://svgsilh.com/png-512/2098873.png',
+    rol INT REFERENCES tbl_rol(id_rol), -- Administrador : 1, Trabajador:2, Usuario:3
     fecha_registro DATETIME DEFAULT GETDATE()
 );
 GO
@@ -55,16 +60,17 @@ CREATE TABLE tbl_prestamo (
     CONSTRAINT FK_Prestamo_Libro FOREIGN KEY (id_libro_fk) REFERENCES tbl_libro(id_libro) ON DELETE SET NULL
 );
 GO
-CREATE TABLE tbl_reserva (
-    id_reserva INT IDENTITY(1,1) PRIMARY KEY,
+CREATE TABLE tbl_solicitud (
+    id_solicitud INT IDENTITY(1,1) PRIMARY KEY,
     id_usuario_fk INT,
     id_libro_fk INT,
-    fecha_reserva DATETIME DEFAULT GETDATE(),
+    fecha_solicitud DATETIME DEFAULT GETDATE(),
     estado TINYINT DEFAULT 0, -- 0: Pendiente, 1: Procesada, 2: Cancelada, 3: Expirada
+    reclamada BIT DEFAULT 0, -- 0: No Reclamada, 1: Reclamada
     fecha_expiracion DATETIME, -- La reserva expira si no se reclama en cierto tiempo
     fecha_procesamiento DATETIME, -- Cuando se convierte en préstamo o se cancela
-    CONSTRAINT FK_Reserva_Usuario FOREIGN KEY (id_usuario_fk) REFERENCES tbl_usuario(id_usuario),
-    CONSTRAINT FK_Reserva_Libro FOREIGN KEY (id_libro_fk) REFERENCES tbl_libro(id_libro) ON DELETE CASCADE
+    CONSTRAINT FK_Solicitud_Usuario FOREIGN KEY (id_usuario_fk) REFERENCES tbl_usuario(id_usuario),
+    CONSTRAINT FK_Solicitud_Libro FOREIGN KEY (id_libro_fk) REFERENCES tbl_libro(id_libro) ON DELETE CASCADE
 );
 GO
 
@@ -79,14 +85,61 @@ CREATE OR ALTER PROCEDURE sp_crear_usuario
     @email NVARCHAR(100),
     @contrasena NVARCHAR(7),
     @telefono NVARCHAR(9),
-    @rol BIT = 0,
+    @imagen NVARCHAR(400),
+    @rol INT, 
     @mensaje NVARCHAR(200) OUTPUT
 AS
 BEGIN
     BEGIN TRY
-        INSERT INTO tbl_usuario (nombre, apellido, email, contrasena, telefono, rol)
-        VALUES (@nombre, @apellido, @email, @contrasena, @telefono, @rol);
+        -- Validar el rol (1: Administrador, 2: Trabajador, 3: Usuario)
+        IF @rol NOT IN (1, 2, 3)
+        BEGIN
+            SET @mensaje = 'Rol inválido. Debe ser 1 (Administrador), 2 (Trabajador) o 3 (Usuario)';
+            RETURN;
+        END
+
+        INSERT INTO tbl_usuario (nombre, apellido, email, contrasena, telefono, imagen, rol)
+        VALUES (@nombre, @apellido, @email, @contrasena, @telefono, @imagen, @rol);
+        
         SET @mensaje = 'Usuario creado exitosamente.';
+    END TRY
+    BEGIN CATCH
+        SET @mensaje = ERROR_MESSAGE();
+    END CATCH
+END;
+GO
+
+CREATE OR ALTER PROCEDURE sp_actualizar_usuario
+    @id_usuario INT,
+    @nombre NVARCHAR(100),
+    @apellido NVARCHAR(100),
+    @email NVARCHAR(100),
+    @contrasena NVARCHAR(7),
+    @telefono NVARCHAR(9),
+    @imagen NVARCHAR(400),
+    @rol INT, -- Cambiado de BIT a INT
+    @mensaje NVARCHAR(200) OUTPUT
+AS
+BEGIN
+    BEGIN TRY
+        -- Validar el rol
+        IF @rol NOT IN (1, 2, 3)
+        BEGIN
+            SET @mensaje = 'Rol inválido. Debe ser 1 (Administrador), 2 (Trabajador) o 3 (Usuario)';
+            RETURN;
+        END
+
+        UPDATE tbl_usuario
+        SET nombre = @nombre,
+            apellido = @apellido,
+            email = @email,
+            contrasena = @contrasena,
+            telefono = @telefono,
+            imagen = @imagen,
+            rol = @rol
+        WHERE id_usuario = @id_usuario;
+        
+        SET @mensaje = 'Usuario actualizado exitosamente.';
     END TRY
     BEGIN CATCH
         SET @mensaje = ERROR_MESSAGE();
@@ -97,7 +150,7 @@ GO
 CREATE OR ALTER PROCEDURE sp_listar_usuarios
 AS
 BEGIN
-    SELECT id_usuario, nombre, apellido, email, telefono, rol, fecha_registro
+    SELECT id_usuario, nombre, apellido, email, telefono, imagen ,rol, fecha_registro
     FROM tbl_usuario;
 END;
 GO
@@ -109,6 +162,7 @@ CREATE OR ALTER PROCEDURE sp_actualizar_usuario
     @email NVARCHAR(100),
     @contrasena NVARCHAR(7),
     @telefono NVARCHAR(9),
+	@imagen NVARCHAR(200),
     @rol BIT,
     @mensaje NVARCHAR(200) OUTPUT
 AS
@@ -120,6 +174,7 @@ BEGIN
             email = @email,
             contrasena = @contrasena,
             telefono = @telefono,
+			imagen = @imagen,
             rol = @rol
         WHERE id_usuario = @id_usuario;
         SET @mensaje = 'Usuario actualizado exitosamente.';
@@ -680,7 +735,7 @@ END;
 GO
 
 -- Procedimiento para crear una reserva
-CREATE OR ALTER PROCEDURE sp_crear_reserva
+CREATE OR ALTER PROCEDURE sp_solicitar
     @id_usuario INT,
     @id_libro INT,
     @mensaje NVARCHAR(200) OUTPUT
@@ -688,16 +743,22 @@ AS
 BEGIN
     BEGIN TRY
         BEGIN TRANSACTION;
-        
-        -- Verificar si el libro existe y está activo
+
+        -- 1. Verificar si el libro existe y está disponible
         IF NOT EXISTS (SELECT 1 FROM tbl_libro WHERE id_libro = @id_libro AND estado = 1)
         BEGIN
             SET @mensaje = 'El libro no está disponible para reservas.';
             ROLLBACK;
             RETURN;
-        END
+        END;
 
-        -- Verificar límite de reservas activas por usuario (máximo 5)
+        -- 2. Eliminar solicitudes expiradas (FIFO: solicitudes más antiguas tienen prioridad)
+        DELETE FROM tbl_reserva
+        WHERE id_usuario_fk = @id_usuario
+        AND DATEDIFF(DAY, fecha_expiracion, GETDATE()) > 1
+        AND estado = 0;
+
+        -- 3. Verificar límite de reservas activas por usuario (máximo 5)
         DECLARE @reservas_activas INT;
         SELECT @reservas_activas = COUNT(*) 
         FROM tbl_reserva 
@@ -706,12 +767,12 @@ BEGIN
 
         IF @reservas_activas >= 5
         BEGIN
-            SET @mensaje = 'Has alcanzado el límite máximo de 5 reservas activas permitidas.';
+            SET @mensaje = 'Has alcanzado el límite máximo de 5 reservas activas.';
             ROLLBACK;
             RETURN;
-        END
+        END;
 
-        -- Verificar si el usuario ya tiene una reserva activa para este libro
+        -- 4. Verificar si el usuario ya tiene una reserva activa para este libro
         IF EXISTS (
             SELECT 1 
             FROM tbl_reserva 
@@ -723,9 +784,9 @@ BEGIN
             SET @mensaje = 'Ya tienes una reserva activa para este libro.';
             ROLLBACK;
             RETURN;
-        END
+        END;
 
-        -- Verificar si el usuario ya tiene el libro prestado
+        -- 5. Verificar si el usuario ya tiene el libro prestado
         IF EXISTS (
             SELECT 1 
             FROM tbl_prestamo 
@@ -737,128 +798,99 @@ BEGIN
             SET @mensaje = 'Ya tienes este libro en préstamo.';
             ROLLBACK;
             RETURN;
-        END
+        END;
 
-        -- Establecer fecha de expiración (7 días por defecto)
-        DECLARE @fecha_expiracion DATETIME = DATEADD(DAY, 7, GETDATE());
+        -- 6. Establecer fecha de expiración (1 día)
+        DECLARE @fecha_expiracion DATETIME = DATEADD(DAY, 1, GETDATE());
 
-        -- Crear la reserva
+        -- 7. Insertar la reserva en orden FIFO
         INSERT INTO tbl_reserva (id_usuario_fk, id_libro_fk, fecha_expiracion)
         VALUES (@id_usuario, @id_libro, @fecha_expiracion);
 
         SET @mensaje = 'Reserva creada exitosamente. Expira el ' + 
-                      CONVERT(NVARCHAR, @fecha_expiracion, 103);
+                      FORMAT(@fecha_expiracion, 'dd/MM/yyyy HH:mm:ss');
+
         COMMIT;
     END TRY
     BEGIN CATCH
         IF @@TRANCOUNT > 0
             ROLLBACK;
         SET @mensaje = ERROR_MESSAGE();
-    END CATCH
+    END CATCH;
 END;
 GO
 
 -- Procedimiento para procesar reservas pendientes
-CREATE OR ALTER PROCEDURE sp_procesar_reservas_pendientes
+CREATE OR ALTER PROCEDURE sp_procesar_solicitud
+    @id_reserva INT
 AS
 BEGIN
     BEGIN TRY
-        -- Marcar como expiradas las reservas que superaron su fecha límite
-        UPDATE tbl_reserva
-        SET estado = 3,
-            fecha_procesamiento = GETDATE()
-        WHERE estado = 0
-        AND fecha_expiracion < GETDATE();
+        DECLARE @estado_actual TINYINT, @fecha_expiracion DATE;
 
-        -- Obtener libros con copias disponibles que tienen reservas pendientes
-        SELECT DISTINCT r.id_libro_fk
-        INTO #libros_disponibles
-        FROM tbl_reserva r
-        INNER JOIN tbl_libro l ON r.id_libro_fk = l.id_libro
-        WHERE r.estado = 0
-        AND l.copias_disponibles > 0;
-
-        -- Procesar cada libro con reservas pendientes
-        DECLARE @id_libro INT;
-        DECLARE cur_libros CURSOR FOR
-        SELECT id_libro_fk FROM #libros_disponibles;
-
-        OPEN cur_libros;
-        FETCH NEXT FROM cur_libros INTO @id_libro;
-
-        WHILE @@FETCH_STATUS = 0
+        -- Verificar si la reserva existe
+        IF NOT EXISTS (SELECT 1 FROM tbl_reserva WHERE id_reserva = @id_reserva)
         BEGIN
-            -- Obtener la reserva más antigua para este libro
-            DECLARE @id_reserva INT, @id_usuario INT;
-            SELECT TOP 1 
-                @id_reserva = id_reserva,
-                @id_usuario = id_usuario_fk
-            FROM tbl_reserva
-            WHERE id_libro_fk = @id_libro
-            AND estado = 0
-            ORDER BY fecha_reserva;
-
-            -- Marcar la reserva como procesada
-            IF @id_reserva IS NOT NULL
-            BEGIN
-                UPDATE tbl_reserva
-                SET estado = 1,
-                    fecha_procesamiento = GETDATE()
-                WHERE id_reserva = @id_reserva;
-
-                -- Notificar al usuario (aquí podrías agregar lógica de notificación)
-                -- Por ejemplo, insertar en una tabla de notificaciones
-            END
-
-            FETCH NEXT FROM cur_libros INTO @id_libro;
+            THROW 50001, 'La reserva no existe.', 1;
         END
 
-        CLOSE cur_libros;
-        DEALLOCATE cur_libros;
+        -- Obtener el estado y la fecha de expiración de la reserva
+        SELECT @estado_actual = estado, @fecha_expiracion = fecha_expiracion
+        FROM tbl_reserva
+        WHERE id_reserva = @id_reserva;
 
-        DROP TABLE #libros_disponibles;
+        -- Validar si la reserva ya fue procesada o cancelada
+        IF @estado_actual IN (1, 2)
+        BEGIN
+            THROW 50002, 'La reserva ya fue procesada o cancelada.', 1;
+        END
+
+        -- Validar si la reserva ha expirado
+        IF @estado_actual = 0 AND @fecha_expiracion < GETDATE()
+        BEGIN
+            THROW 50003, 'La reserva ha expirado y no puede ser procesada.', 1;
+        END
+
+        -- Marcar la reserva como procesada
+        UPDATE tbl_reserva
+        SET estado = 1,
+            fecha_procesamiento = GETDATE()
+        WHERE id_reserva = @id_reserva;
+
+        PRINT 'Reserva procesada correctamente.';
     END TRY
     BEGIN CATCH
-        IF CURSOR_STATUS('global', 'cur_libros') >= 0
-        BEGIN
-            CLOSE cur_libros;
-            DEALLOCATE cur_libros;
-        END
-        
-        IF OBJECT_ID('tempdb..#libros_disponibles') IS NOT NULL
-            DROP TABLE #libros_disponibles;
-
         THROW;
     END CATCH
 END;
 GO
 
 -- Procedimiento para cancelar una reserva
-CREATE OR ALTER PROCEDURE sp_cancelar_reserva
-    @id_reserva INT,
+CREATE OR ALTER PROCEDURE sp_cancelar_solicitud
+    @id_solicitud INT,
     @mensaje NVARCHAR(200) OUTPUT
 AS
 BEGIN
     BEGIN TRY
-        -- Verificar si la reserva existe y está pendiente
+        -- Verificar si la solicitud existe y está pendiente
         IF NOT EXISTS (
             SELECT 1 
-            FROM tbl_reserva 
-            WHERE id_reserva = @id_reserva 
+            FROM tbl_solicitud 
+            WHERE id_solicitud = @id_solicitud 
             AND estado = 0
         )
         BEGIN
-            SET @mensaje = 'La reserva no existe o ya no está pendiente.';
+            SET @mensaje = 'La solicitud no existe o ya no está pendiente.';
             RETURN;
         END
 
-        -- Cancelar la reserva
-        UPDATE tbl_reserva
+        -- Cancelar la solicitud
+        UPDATE tbl_solicitud
         SET estado = 2,
             fecha_procesamiento = GETDATE()
-        WHERE id_reserva = @id_reserva;
+        WHERE id_solicitud = @id_solicitud;
 
-        SET @mensaje = 'Reserva cancelada exitosamente.';
+        SET @mensaje = 'Solicitud cancelada exitosamente.';
     END TRY
     BEGIN CATCH
         SET @mensaje = ERROR_MESSAGE();
@@ -866,17 +898,16 @@ BEGIN
 END;
 GO
 
--- Procedimiento para consultar reservas de un usuario
-CREATE OR ALTER PROCEDURE sp_consultar_reservas_usuario
+-- Procedimiento para consultar solicitudes de un usuario
+CREATE OR ALTER PROCEDURE sp_consultar_solicitudes_usuario
     @id_usuario INT
 AS
 BEGIN
     SELECT 
-        r.id_reserva,
+        s.id_solicitud,
         l.titulo AS libro,
-        r.fecha_reserva,
-        r.fecha_expiracion,
-        CASE r.estado
+        s.fecha_solicitud,
+        CASE s.estado
             WHEN 0 THEN 'Pendiente'
             WHEN 1 THEN 'Procesada'
             WHEN 2 THEN 'Cancelada'
@@ -884,23 +915,23 @@ BEGIN
         END AS estado,
         l.copias_disponibles,
         CASE 
-            WHEN r.estado = 0 AND l.copias_disponibles > 0 THEN 'Disponible para préstamo'
-            WHEN r.estado = 0 THEN 'En espera de disponibilidad'
+            WHEN s.estado = 0 AND l.copias_disponibles > 0 THEN 'Disponible para préstamo'
+            WHEN s.estado = 0 THEN 'En espera de disponibilidad'
             ELSE ''
         END AS observacion
-    FROM tbl_reserva r
-    INNER JOIN tbl_libro l ON r.id_libro_fk = l.id_libro
-    WHERE r.id_usuario_fk = @id_usuario
-    ORDER BY r.fecha_reserva DESC;
+    FROM tbl_solicitud s
+    INNER JOIN tbl_libro l ON s.id_libro_fk = l.id_libro
+    WHERE s.id_usuario_fk = @id_usuario
+    ORDER BY s.fecha_solicitud DESC;
 END;
 GO
 
-CREATE OR ALTER PROCEDURE sp_listar_reservas
+CREATE OR ALTER PROCEDURE sp_listar_solicitudes
     @estado TINYINT = NULL -- Parámetro opcional para filtrar por estado
 AS
 BEGIN
     SELECT 
-        r.id_reserva,
+        s.id_solicitud,
         -- Información del Usuario
         u.id_usuario,
         CONCAT(u.nombre, ' ', u.apellido) AS nombre_usuario,
@@ -914,63 +945,63 @@ BEGIN
         ISNULL(c.nombre, 'Sin categoría') AS categoria,
         l.copias_disponibles,
         
-        -- Información de la Reserva
-        r.fecha_reserva,
-        r.fecha_expiracion,
-        r.fecha_procesamiento,
-        CASE r.estado
+        -- Información de la Solicitud
+        s.fecha_solicitud,
+        s.fecha_expiracion,
+        s.fecha_procesamiento,
+        CASE s.estado
             WHEN 0 THEN 'Pendiente'
             WHEN 1 THEN 'Procesada'
             WHEN 2 THEN 'Cancelada'
             WHEN 3 THEN 'Expirada'
-        END AS estado_reserva,
+        END AS estado_solicitud,
         
         -- Información adicional
         CASE 
-            WHEN r.estado = 0 AND l.copias_disponibles > 0 THEN 'Libro disponible para préstamo'
-            WHEN r.estado = 0 AND l.copias_disponibles = 0 THEN 'En espera de disponibilidad'
-            WHEN r.estado = 0 AND r.fecha_expiracion < GETDATE() THEN 'Por expirar'
+            WHEN s.estado = 0 AND l.copias_disponibles > 0 THEN 'Libro disponible para préstamo'
+            WHEN s.estado = 0 AND l.copias_disponibles = 0 THEN 'En espera de disponibilidad'
+            WHEN s.estado = 0 AND s.fecha_expiracion < GETDATE() THEN 'Por expirar'
             ELSE ''
         END AS observaciones,
         
         -- Tiempo de espera
         CASE 
-            WHEN r.estado = 0 THEN 
-                DATEDIFF(day, r.fecha_reserva, GETDATE())
+            WHEN s.estado = 0 THEN 
+                DATEDIFF(day, s.fecha_solicitud, GETDATE())
             ELSE
-                DATEDIFF(day, r.fecha_reserva, ISNULL(r.fecha_procesamiento, GETDATE()))
+                DATEDIFF(day, s.fecha_solicitud, ISNULL(s.fecha_procesamiento, GETDATE()))
         END AS dias_espera,
         
-        -- Posición en la cola (solo para reservas pendientes)
+        -- Posición en la cola (solo para solicitudes pendientes)
         CASE 
-            WHEN r.estado = 0 THEN (
+            WHEN s.estado = 0 THEN (
                 SELECT COUNT(*) 
-                FROM tbl_reserva r2 
-                WHERE r2.id_libro_fk = r.id_libro_fk 
-                AND r2.estado = 0 
-                AND r2.fecha_reserva <= r.fecha_reserva
+                FROM tbl_solicitud s2 
+                WHERE s2.id_libro_fk = s.id_libro_fk 
+                AND s2.estado = 0 
+                AND s2.fecha_solicitud <= s.fecha_solicitud
             )
             ELSE NULL
         END AS posicion_cola
 
-    FROM tbl_reserva r
-    INNER JOIN tbl_usuario u ON r.id_usuario_fk = u.id_usuario
-    INNER JOIN tbl_libro l ON r.id_libro_fk = l.id_libro
+    FROM tbl_solicitud s
+    INNER JOIN tbl_usuario u ON s.id_usuario_fk = u.id_usuario
+    INNER JOIN tbl_libro l ON s.id_libro_fk = l.id_libro
     LEFT JOIN tbl_autor a ON l.id_autor_fk = a.id_autor
     LEFT JOIN tbl_categoria c ON l.id_categoria_fk = c.id_categoria
-    WHERE (@estado IS NULL OR r.estado = @estado)
+    WHERE (@estado IS NULL OR s.estado = @estado)
     ORDER BY 
-        r.estado,  -- Primero las pendientes
-        r.fecha_reserva ASC;  -- Las más antiguas primero
+        s.estado,  -- Primero las pendientes
+        s.fecha_solicitud ASC;  -- Las más antiguas primero
         
-    -- Mostrar resumen de reservas
+    -- Mostrar resumen de solicitudes
     SELECT 
-        COUNT(CASE WHEN estado = 0 THEN 1 END) as reservas_pendientes,
-        COUNT(CASE WHEN estado = 1 THEN 1 END) as reservas_procesadas,
-        COUNT(CASE WHEN estado = 2 THEN 1 END) as reservas_canceladas,
-        COUNT(CASE WHEN estado = 3 THEN 1 END) as reservas_expiradas,
-        COUNT(*) as total_reservas
-    FROM tbl_reserva;
+        COUNT(CASE WHEN estado = 0 THEN 1 END) as solicitudes_pendientes,
+        COUNT(CASE WHEN estado = 1 THEN 1 END) as solicitudes_procesadas,
+        COUNT(CASE WHEN estado = 2 THEN 1 END) as solicitudes_canceladas,
+        COUNT(CASE WHEN estado = 3 THEN 1 END) as solicitudes_expiradas,
+        COUNT(*) as total_solicitudes
+    FROM tbl_solicitud;
 END;
 GO
 

@@ -1,0 +1,54 @@
+REGLAS DE NEGOCIO:
+
+--------------------------------------------------------------------------------------------------------------------
+
+Para Usuarios:
+Un usuario no puede prestarse el mismo libro dos veces, si la primera prestación sigue pendiente.
+
+Para Libros:
+
+No se puede eliminar un libro que tenga préstamos pendientes
+Al eliminar un libro, los préstamos históricos se marcan como "Libro Eliminado" pero se mantienen en el registro
+Los préstamos ahora tienen tres estados: Pendiente (0), Entregado (1), y Libro Eliminado (2)
+
+
+Para Categorías:
+
+Al eliminar una categoría, los libros asociados no se eliminan
+Los libros quedan con categoría NULL y se muestran como "Sin categoría"
+La eliminación es segura y mantiene la integridad de los datos
+
+
+Para Autores:
+
+Al eliminar un autor, los libros asociados no se eliminan
+Los libros quedan con autor NULL y se muestran como "Autor desconocido"
+La eliminación es segura y mantiene la integridad de los datos
+
+
+Para Préstamos:
+
+Se mantiene el historial completo de préstamos incluso cuando se elimina un libro
+Los préstamos de libros eliminados se muestran claramente marcados
+Se usan LEFT JOINs para mantener visible todo el historial
+El plazo máximo de préstamo para un libro es de 30 días.
+
+
+Mensajes de Retroalimentación:
+
+Todos los procedimientos de eliminación ahora devuelven mensajes explicativos
+Se informa al usuario sobre el resultado de las operaciones
+Se manejan los errores de manera apropiada
+
+Para Reservas:
+Una reserva expira después de 7 días si no se reclama
+No se puede reservar un libro que ya se tiene en préstamo
+No se puede tener múltiples reservas activas para el mismo libro
+Las reservas se procesan en orden FIFO (First In, First Out),se respeta el orden de las reservas (primera reserva, primer préstamo)
+Un usuario como máximo puede tener 5 reservas activas.
+
+Integridad Referencial:
+
+Se cambiaron las restricciones ON DELETE CASCADE por ON DELETE SET NULL
+Se preserva la información histórica
+Se mantiene la trazabilidad de todas las operaciones

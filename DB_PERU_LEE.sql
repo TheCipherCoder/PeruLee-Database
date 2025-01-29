@@ -13,6 +13,7 @@ CREATE TABLE tbl_rol(
 	rol NVARCHAR(10) NOT NULL
 );
 GO
+
 CREATE TABLE tbl_usuario (
     id_usuario INT IDENTITY(1000,1) PRIMARY KEY,
     nombre NVARCHAR(100) NOT NULL,
@@ -25,6 +26,7 @@ CREATE TABLE tbl_usuario (
     fecha_registro DATETIME DEFAULT GETDATE()
 );
 GO
+
 CREATE TABLE tbl_categoria (
     id_categoria INT IDENTITY(1,1) PRIMARY KEY,
     nombre NVARCHAR(100) NOT NULL
@@ -37,6 +39,7 @@ CREATE TABLE tbl_autor (
     apellido NVARCHAR(100) NOT NULL
 );
 GO
+
 CREATE TABLE tbl_libro (
     id_libro INT IDENTITY(10000,1) PRIMARY KEY,
     titulo NVARCHAR(200) NOT NULL,
@@ -50,6 +53,7 @@ CREATE TABLE tbl_libro (
     CONSTRAINT FK_Libro_Autor FOREIGN KEY (id_autor_fk) REFERENCES tbl_autor(id_autor) ON DELETE SET NULL
 );
 GO
+
 CREATE TABLE tbl_prestamo (
     id_prestamo INT IDENTITY(1,1) PRIMARY KEY,
     id_usuario_fk INT,
@@ -62,6 +66,7 @@ CREATE TABLE tbl_prestamo (
     CONSTRAINT FK_Prestamo_Libro FOREIGN KEY (id_libro_fk) REFERENCES tbl_libro(id_libro) ON DELETE SET NULL
 );
 GO
+
 CREATE TABLE tbl_solicitud (
     id_solicitud INT IDENTITY(1,1) PRIMARY KEY,
     id_usuario_fk INT,
@@ -766,7 +771,7 @@ BEGIN
 END;
 GO
 
--- Procedimiento para crear una reserva
+-- Procedimiento para crear una solicitud
 CREATE OR ALTER PROCEDURE sp_solicitar
     @id_usuario INT,
     @id_libro INT,
@@ -785,7 +790,7 @@ BEGIN
         END;
 
         -- 2. Eliminar solicitudes expiradas (FIFO: solicitudes más antiguas tienen prioridad)
-        DELETE FROM tbl_reserva
+        DELETE FROM tbl_solicitud
         WHERE id_usuario_fk = @id_usuario
         AND DATEDIFF(DAY, fecha_expiracion, GETDATE()) > 1
         AND estado = 0;
@@ -793,7 +798,7 @@ BEGIN
         -- 3. Verificar límite de reservas activas por usuario (máximo 5)
         DECLARE @reservas_activas INT;
         SELECT @reservas_activas = COUNT(*) 
-        FROM tbl_reserva 
+        FROM tbl_solicitud 
         WHERE id_usuario_fk = @id_usuario 
         AND estado = 0;
 
@@ -807,7 +812,7 @@ BEGIN
         -- 4. Verificar si el usuario ya tiene una reserva activa para este libro
         IF EXISTS (
             SELECT 1 
-            FROM tbl_reserva 
+            FROM tbl_solicitud 
             WHERE id_usuario_fk = @id_usuario 
             AND id_libro_fk = @id_libro 
             AND estado = 0
@@ -832,12 +837,40 @@ BEGIN
             RETURN;
         END;
 
-        -- 6. Establecer fecha de expiración (1 día)
-        DECLARE @fecha_expiracion DATETIME = DATEADD(DAY, 1, GETDATE());
+        -- 6. Establecer fecha de expiración
+        DECLARE @fecha_expiracion DATETIME;
+
+        -- Verificar si hay copias disponibles
+        DECLARE @copias_disponibles INT;
+        SELECT @copias_disponibles = copias_disponibles
+        FROM tbl_libro
+        WHERE id_libro = @id_libro;
+
+        IF @copias_disponibles > 0
+        BEGIN
+            -- Si hay copias disponibles, la reserva expira en 1 día
+            SET @fecha_expiracion = DATEADD(DAY, 1, GETDATE());
+        END
+        ELSE
+        BEGIN
+            -- Si no hay copias disponibles, la reserva expira en la fecha de la próxima devolución
+            SELECT TOP 1 @fecha_expiracion = fecha_devolucion
+            FROM tbl_prestamo
+            WHERE id_libro_fk = @id_libro
+            AND estado = 0
+            ORDER BY fecha_devolucion ASC;
+
+            IF @fecha_expiracion IS NULL
+            BEGIN
+                SET @mensaje = 'No se puede determinar la fecha de expiración para la reserva.';
+                ROLLBACK;
+                RETURN;
+            END
+        END
 
         -- 7. Insertar la reserva en orden FIFO
-        INSERT INTO tbl_reserva (id_usuario_fk, id_libro_fk, fecha_expiracion)
-        VALUES (@id_usuario, @id_libro, @fecha_expiracion);
+        INSERT INTO tbl_solicitud (id_usuario_fk, id_libro_fk, fecha_solicitud, fecha_expiracion)
+        VALUES (@id_usuario, @id_libro, GETDATE(), @fecha_expiracion);
 
         SET @mensaje = 'Reserva creada exitosamente. Expira el ' + 
                       FORMAT(@fecha_expiracion, 'dd/MM/yyyy HH:mm:ss');
@@ -854,42 +887,42 @@ GO
 
 -- Procedimiento para procesar reservas pendientes
 CREATE OR ALTER PROCEDURE sp_procesar_solicitud
-    @id_reserva INT
+    @id_solicitud INT
 AS
 BEGIN
     BEGIN TRY
         DECLARE @estado_actual TINYINT, @fecha_expiracion DATE;
 
-        -- Verificar si la reserva existe
-        IF NOT EXISTS (SELECT 1 FROM tbl_reserva WHERE id_reserva = @id_reserva)
+        -- Verificar si la solicitud existe
+        IF NOT EXISTS (SELECT 1 FROM tbl_solicitud WHERE id_solicitud = @id_solicitud)
         BEGIN
-            THROW 50001, 'La reserva no existe.', 1;
+            THROW 50001, 'La solicitud no existe.', 1;
         END
 
-        -- Obtener el estado y la fecha de expiración de la reserva
+        -- Obtener el estado y la fecha de expiración de la solicitud
         SELECT @estado_actual = estado, @fecha_expiracion = fecha_expiracion
-        FROM tbl_reserva
-        WHERE id_reserva = @id_reserva;
+        FROM tbl_solicitud
+        WHERE id_solicitud = @id_solicitud;
 
-        -- Validar si la reserva ya fue procesada o cancelada
+        -- Validar si la solicitud ya fue procesada o cancelada
         IF @estado_actual IN (1, 2)
         BEGIN
-            THROW 50002, 'La reserva ya fue procesada o cancelada.', 1;
+            THROW 50002, 'La solicitud ya fue procesada o cancelada.', 1;
         END
 
-        -- Validar si la reserva ha expirado
+        -- Validar si la solicitud ha expirado
         IF @estado_actual = 0 AND @fecha_expiracion < GETDATE()
         BEGIN
-            THROW 50003, 'La reserva ha expirado y no puede ser procesada.', 1;
+            THROW 50003, 'La solicitud ha expirado y no puede ser procesada.', 1;
         END
 
-        -- Marcar la reserva como procesada
-        UPDATE tbl_reserva
-        SET estado = 1,
+        -- Marcar la solicitud como procesada
+        UPDATE tbl_solicitud
+        SET estado = 1, -- 1: Procesada
             fecha_procesamiento = GETDATE()
-        WHERE id_reserva = @id_reserva;
+        WHERE id_solicitud = @id_solicitud;
 
-        PRINT 'Reserva procesada correctamente.';
+        PRINT 'Solicitud procesada correctamente.';
     END TRY
     BEGIN CATCH
         THROW;
@@ -1093,7 +1126,6 @@ EXEC sp_crear_libro 'La República', '380-01-01', 9, 9, 3, 1,'https://lh3.googleu
 EXEC sp_crear_libro 'El malestar en la cultura', '1930-01-01', 10, 10, 2, 1,'https://lh3.googleusercontent.com/fife/ALs6j_Gm1vTo-GAMvfxCB2SBe_ksj9P-0Db9sxldPpHlWOfjCRAAcHa8llSjK7v69vSRNDP24F_kxYkhw1VgI4ukENTqaTFnom_tpaSpmxLrYmijmTfx4hz3yfk_6F3KgkFSUAnBt8f2NUUHBhCfcX4fMduGx87C6jb2VKjfTR1y43dZ-Ogu2p02gsL6jpPBvKaZljnKzz5zY85NZ2wcBWO5H-x-eMjMxQBCP0n39Fww-WYhMl-rYgyjQJO5qiydHTANHLplVukw3idy1_jHwM1W8Gq6B5Vu6OIGnmIBiaS433OJxMvG8Qrc6h_TYEOCSjV7fJtCBgONm8me8JUzPClpwTOf1HT0qUpvK4zfy2_5xaBAazmXER0vi4YaQdBDoXVycjJffTV-L-jLfqoHwb8Mc2F8PhWmM0Ed-9EVAVFA3YdVRni6K6gEvkla2fNuKd8G4cqFhgLRBQTrQCMasUag9oJ15w0KoAFWHYptAON954RWFTrrSdkCi80g6ZRsV8tG8PXjbL9DRs_2ICl9LEclqo_CakvvBGm63cJV6fTwI8dqy9y9rSAzPaT4SrvPsYpHfOtaWROQD6k0ED_CkKJkJzyRbcNdtFXIBg4n1Y3KtGNDiF6iuc_5hKAX8mMGCKcQ426Dt0t6OBLo-mQdHB56H9JyZusEEd1kPHk8jwAhSTHD_m7rvwy5NqOx32q8w_745-duLli9TTlcrXA1FUl9BI_YcySo8XN93C6AxmQ5Tlm-SYYUXS0M5GOAWmzpePbuBrmuOfeZ2kPB_XIAvE9VBsi6F9-Y9GPmku1-1NA0CXVFh2HWxD-Wi3tZeANGQmtfItqprnAVnyMtrqNdSxYgRdph2-QkhPNW0HWKC5NCD_F8aaKEOZ59pVJx6mllTHA5BEfmJk41IT19ZtO4Zp6ekrrphtB341OqOHb2NroKREIoJCW60LBbsyLsEmyAeRt35Dhd52U7JQjgbpIvi04a1sLDK8XNJOMajELa6ICSZkkTVVVw_GFKytwgpVghgZPna_Gf1wxFIxn4zJ3sWqRjJuZAVewlFATUCCIetX1W22QH2GhuQNQJY3JrL7W6tVcS1fkdFHl0B9DF1XYuKEXsz8ioi7-e1q443JnVTAm4nMy_djwPAras7htY1QcERsPhHRvOso9Cgssy5zjG-BH1zJp9Ntq3OrKA-NpRt3PWJXwLOICcx_ugsjla5RI-86YAUTKV3BsqW_woQcpUkcB5ZL__mnr22yCb-JutzRUHljRelKMolCOhWrFiago4CZIuhWK3ihFrsooU1KK3qI-lUP528LkkEaouw4_Fp0wm4QdwfJfmPEBO3Y857jXGk63wxvaxPmmh0ASfWzwhqse8UZohmOl55NiqY9a4nw3bcJ4s0U29qRxphfYxKaX_l1BIe53VPQ3ZtrWRLo0-okRQUrCTU3jTL2WMN6WIGKkiw6ay3lN2dk3S8gmLuOqbWSBZUyu65y3OoxaEUBf6_t_ag6SfwA5TivmYFGtnaVmiPx-hUryF0tntIcXFvpgVwLjbCrwVBi1zwJMdKbdsrjO2im_gmG9L57vXUv9kWbm2qRBE5hZ_qzTN-X6nQDsdR9rYKiLTG9J78hnh-cekde32GHB_xqDI-eUyG1AUFm50zg8czs5JhdNBF2ZoqufhymHJ_t9mDRfQ8Xygox6y7g3CuLY1ppIq=w1910-h957' ,@mensaje OUTPUT;
 
 -- Insertar Préstamos
-DECLARE @mensaje nvarchar(200);
 DECLARE @fecha_devolucion DATETIME = DATEADD(day, 14, GETDATE());
 
 EXEC sp_prestar_libro 1001, 10000, @fecha_devolucion, @mensaje OUTPUT;
@@ -1137,4 +1169,6 @@ EXEC sp_listar_solicitudes;
 EXEC sp_consultar_solicitudes_usuario 1001;
 
 -- Devolver libro
-EXEC sp_devolver_libro 2;
+--EXEC sp_devolver_libro 2;
+-- TODO : pero haz dejado tbl_reserva en el procedure de solicitar cuando ya no hay tlb_reserva y lo mismo en procesar solicitud
+-- TODO :  Establecer fecha de expiración si el libro está agotado (igual fecha prox devolucion) si no (1 dia)

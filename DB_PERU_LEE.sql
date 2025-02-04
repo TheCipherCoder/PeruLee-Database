@@ -82,7 +82,7 @@ CREATE TABLE tbl_solicitud (
 GO
 
 /********************************************************************************************/
--- STORE PROCEDURES (CRUD) por cada tabla
+/* STORE PROCEDURES (CRUD) ajustados después de cambios en las tablas */
 /********************************************************************************************/
 
 -- Store Procedures para Rol

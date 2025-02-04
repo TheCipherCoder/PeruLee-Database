@@ -48,7 +48,7 @@ CREATE TABLE tbl_libro (
     id_categoria_fk INT,
     id_autor_fk INT,
     copias_disponibles INT NOT NULL DEFAULT 1 CHECK (copias_disponibles >= 0),
-    estado BIT DEFAULT 1, -- Disponible : 1 , No disponible : 0
+    estado VARCHAR(20) DEFAULT 'Disponible' CHECK (estado IN ('Disponible', 'No disponible')), -- Pendiente, Entregado, Libro Eliminado
     CONSTRAINT FK_Libro_Categoria FOREIGN KEY (id_categoria_fk) REFERENCES tbl_categoria(id_categoria) ON DELETE SET NULL,    
     CONSTRAINT FK_Libro_Autor FOREIGN KEY (id_autor_fk) REFERENCES tbl_autor(id_autor) ON DELETE SET NULL
 );
@@ -61,7 +61,7 @@ CREATE TABLE tbl_prestamo (
     fecha_prestamo DATETIME DEFAULT GETDATE(),
     fecha_devolucion DATETIME,
     fecha_devolucion_real DATETIME,
-    estado TINYINT DEFAULT 0, -- Pendiente : 0 , Entregado: 1, Libro Eliminado: 2
+    estado VARCHAR(20) DEFAULT 'Pendiente' CHECK (estado IN ('Pendiente', 'Entregado', 'Libro Eliminado')), -- Pendiente, Entregado, Libro Eliminado
     CONSTRAINT FK_Prestamo_Usuario FOREIGN KEY (id_usuario_fk) REFERENCES tbl_usuario(id_usuario),
     CONSTRAINT FK_Prestamo_Libro FOREIGN KEY (id_libro_fk) REFERENCES tbl_libro(id_libro) ON DELETE SET NULL
 );
@@ -72,7 +72,7 @@ CREATE TABLE tbl_solicitud (
     id_usuario_fk INT,
     id_libro_fk INT,
     fecha_solicitud DATETIME DEFAULT GETDATE(),
-    estado TINYINT DEFAULT 0, -- 0: Pendiente, 1: Procesada, 2: Cancelada, 3: Expirada
+	estado VARCHAR(20) DEFAULT 'Pendiente' CHECK (estado IN ('Pendiente', 'Procesada', 'Cancelada', 'Expirada')), -- Pendiente, Entregado, Libro Eliminado
     reclamada BIT DEFAULT 0, -- 0: No Reclamada, 1: Reclamada
     fecha_expiracion DATETIME, -- La reserva expira si no se reclama en cierto tiempo
     fecha_procesamiento DATETIME, -- Cuando se convierte en préstamo o se cancela

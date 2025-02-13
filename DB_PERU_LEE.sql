@@ -722,24 +722,19 @@ BEGIN
         p.fecha_prestamo,
         p.fecha_devolucion,
         p.fecha_devolucion_real,
-        CASE 
-            WHEN p.estado = 0 THEN 'Pendiente'
-            WHEN p.estado = 1 THEN 'Entregado'
-            WHEN p.estado = 2 THEN 'Libro Eliminado'
-            ELSE 'Desconocido'
-        END AS estado_prestamo,
+        p.estado AS estado_prestamo,
         -- Días de atraso (si aplica)
         CASE 
-            WHEN p.estado = 0 AND GETDATE() > p.fecha_devolucion 
+            WHEN p.estado = 'Pendiente' AND GETDATE() > p.fecha_devolucion 
             THEN DATEDIFF(day, p.fecha_devolucion, GETDATE())
-            WHEN p.estado = 1 AND p.fecha_devolucion_real > p.fecha_devolucion 
+            WHEN p.estado = 'Entregado' AND p.fecha_devolucion_real > p.fecha_devolucion 
             THEN DATEDIFF(day, p.fecha_devolucion, p.fecha_devolucion_real)
             ELSE 0
         END AS dias_atraso,
         -- Alerta
         CASE 
-            WHEN p.estado = 0 AND GETDATE() > p.fecha_devolucion THEN 'ATRASADO'
-            WHEN p.estado = 0 AND DATEDIFF(day, GETDATE(), p.fecha_devolucion) <= 3 THEN 'POR VENCER'
+            WHEN p.estado = 'Pendiente' AND GETDATE() > p.fecha_devolucion THEN 'ATRASADO'
+            WHEN p.estado = 'Pendiente' AND DATEDIFF(day, GETDATE(), p.fecha_devolucion) <= 3 THEN 'POR VENCER'
             ELSE ''
         END AS alerta
     FROM tbl_prestamo p
@@ -748,24 +743,25 @@ BEGIN
     LEFT JOIN tbl_categoria c ON l.id_categoria_fk = c.id_categoria
     WHERE 
         p.id_usuario_fk = @id_usuario
-        AND (@incluir_historico = 1 OR p.estado = 0) -- Solo préstamos activos si @incluir_historico = 0
+        AND (@incluir_historico = 1 OR p.estado = 'Pendiente') -- Solo préstamos activos si @incluir_historico = 0
     ORDER BY 
         CASE 
-            WHEN p.estado = 0 AND GETDATE() > p.fecha_devolucion THEN 0
-            ELSE p.estado 
+            WHEN p.estado = 'Pendiente' AND GETDATE() > p.fecha_devolucion THEN 0
+            ELSE 1 
         END,
         p.fecha_prestamo DESC;
 
     -- Mostrar resumen
     SELECT
-        COUNT(CASE WHEN estado = 0 THEN 1 END) AS prestamos_pendientes,
-        COUNT(CASE WHEN estado = 1 THEN 1 END) AS prestamos_entregados,
-        COUNT(CASE WHEN estado = 2 THEN 1 END) AS prestamos_libro_eliminado,
+        COUNT(CASE WHEN estado = 'Pendiente' THEN 1 END) AS prestamos_pendientes,
+        COUNT(CASE WHEN estado = 'Entregado' THEN 1 END) AS prestamos_entregados,
+        COUNT(CASE WHEN estado = 'Libro Eliminado' THEN 1 END) AS prestamos_libro_eliminado,
         COUNT(*) AS total_prestamos
     FROM tbl_prestamo
     WHERE id_usuario_fk = @id_usuario;
 END;
 GO
+
 
 -- Procedimiento para crear una solicitud
 CREATE OR ALTER PROCEDURE sp_solicitar
@@ -778,7 +774,7 @@ BEGIN
         BEGIN TRANSACTION;
 
         -- 1. Verificar si el libro existe y está disponible
-        IF NOT EXISTS (SELECT 1 FROM tbl_libro WHERE id_libro = @id_libro AND estado = 1)
+        IF NOT EXISTS (SELECT 1 FROM tbl_libro WHERE id_libro = @id_libro AND estado = 'Disponible')
         BEGIN
             SET @mensaje = 'El libro no está disponible para reservas.';
             ROLLBACK;
@@ -1005,11 +1001,13 @@ END;
 GO
 
 CREATE OR ALTER PROCEDURE sp_listar_solicitudes
-    @estado TINYINT = NULL -- Parámetro opcional para filtrar por estado
+    @estado VARCHAR(20) = NULL -- Parámetro opcional para filtrar por estado
 AS
 BEGIN
-
-	exec sp_actualizar_solicitudes;
+    SET NOCOUNT ON;
+    
+    -- Ejecutar actualización de solicitudes antes de listar
+    EXEC sp_actualizar_solicitudes;
 
     SELECT 
         s.id_solicitud,
@@ -1030,36 +1028,29 @@ BEGIN
         s.fecha_solicitud,
         s.fecha_expiracion,
         s.fecha_procesamiento,
-        CASE s.estado
-            WHEN 0 THEN 'Pendiente'
-            WHEN 1 THEN 'Procesada'
-            WHEN 2 THEN 'Cancelada'
-            WHEN 3 THEN 'Expirada'
-        END AS estado_solicitud,
+        s.estado AS estado_solicitud,
         
         -- Información adicional
         CASE 
-            WHEN s.estado = 0 AND l.copias_disponibles > 0 THEN 'Libro disponible para préstamo'
-            WHEN s.estado = 0 AND l.copias_disponibles = 0 THEN 'En espera de disponibilidad'
-            WHEN s.estado = 0 AND s.fecha_expiracion < GETDATE() THEN 'Por expirar'
+            WHEN s.estado = 'Pendiente' AND l.copias_disponibles > 0 THEN 'Libro disponible para préstamo'
+            WHEN s.estado = 'Pendiente' AND l.copias_disponibles = 0 THEN 'En espera de disponibilidad'
+            WHEN s.estado = 'Pendiente' AND s.fecha_expiracion < GETDATE() THEN 'Por expirar'
             ELSE ''
         END AS observaciones,
         
         -- Tiempo de espera
         CASE 
-            WHEN s.estado = 0 THEN 
-                DATEDIFF(day, s.fecha_solicitud, GETDATE())
-            ELSE
-                DATEDIFF(day, s.fecha_solicitud, ISNULL(s.fecha_procesamiento, GETDATE()))
+            WHEN s.estado = 'Pendiente' THEN DATEDIFF(day, s.fecha_solicitud, GETDATE())
+            ELSE DATEDIFF(day, s.fecha_solicitud, ISNULL(s.fecha_procesamiento, GETDATE()))
         END AS dias_espera,
         
         -- Posición en la cola (solo para solicitudes pendientes)
         CASE 
-            WHEN s.estado = 0 THEN (
+            WHEN s.estado = 'Pendiente' THEN (
                 SELECT COUNT(*) 
                 FROM tbl_solicitud s2 
                 WHERE s2.id_libro_fk = s.id_libro_fk 
-                AND s2.estado = 0 
+                AND s2.estado = 'Pendiente'
                 AND s2.fecha_solicitud <= s.fecha_solicitud
             )
             ELSE NULL
@@ -1072,19 +1063,26 @@ BEGIN
     LEFT JOIN tbl_categoria c ON l.id_categoria_fk = c.id_categoria
     WHERE (@estado IS NULL OR s.estado = @estado)
     ORDER BY 
-        s.estado,  -- Primero las pendientes
-        s.fecha_solicitud ASC;  -- Las más antiguas primero
+        CASE s.estado
+            WHEN 'Pendiente' THEN 0
+            WHEN 'Expirada' THEN 1
+            WHEN 'Cancelada' THEN 2
+            WHEN 'Procesada' THEN 3
+            ELSE 4
+        END,
+        s.fecha_solicitud ASC;
         
     -- Mostrar resumen de solicitudes
     SELECT 
-        COUNT(CASE WHEN estado = 0 THEN 1 END) as solicitudes_pendientes,
-        COUNT(CASE WHEN estado = 1 THEN 1 END) as solicitudes_procesadas,
-        COUNT(CASE WHEN estado = 2 THEN 1 END) as solicitudes_canceladas,
-        COUNT(CASE WHEN estado = 3 THEN 1 END) as solicitudes_expiradas,
-        COUNT(*) as total_solicitudes
+        COUNT(CASE WHEN estado = 'Pendiente' THEN 1 END) AS solicitudes_pendientes,
+        COUNT(CASE WHEN estado = 'Procesada' THEN 1 END) AS solicitudes_procesadas,
+        COUNT(CASE WHEN estado = 'Cancelada' THEN 1 END) AS solicitudes_canceladas,
+        COUNT(CASE WHEN estado = 'Expirada' THEN 1 END) AS solicitudes_expiradas,
+        COUNT(*) AS total_solicitudes
     FROM tbl_solicitud;
 END;
 GO
+
 
 /********************************************************************************************/
 -- INSERCIONES INICIALES
@@ -1170,20 +1168,26 @@ EXEC sp_listar_autores;
 EXEC sp_listar_categorias;
 EXEC sp_listar_libros;
 EXEC sp_listar_usuarios;
-exec sp_consultar_prestamos
 
 -- Consultar Prestamos
---EXEC sp_consultar_prestamos
+EXEC sp_consultar_prestamos
 
 -- Consultar Prestamos Por Usuarios
--- EXEC sp_consultar_prestamos_por_usuario 1002, 1;
+EXEC sp_consultar_prestamos_por_usuario 1002, 1;
 
 -- Consultar reservas activas
 EXEC sp_listar_solicitudes;
 
+DECLARE @mensaje VARCHAR(200)
+EXEC sp_solicitar 1001, 10000, @mensaje OUTPUT
+PRINT @mensaje
+
+
 -- Consultar reservas actibva Por Usuarios
 EXEC sp_consultar_solicitudes_usuario 1001;
+exec sp_procesar_solicitud 1
 
 -- Devolver libro
 --EXEC sp_devolver_libro 2;
+EXEC sp_devolver_libro 2, 'nuevo mensaje';
 exec sp_listar_usuarios

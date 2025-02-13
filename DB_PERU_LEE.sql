@@ -877,15 +877,17 @@ GO
 CREATE OR ALTER PROCEDURE sp_actualizar_solicitudes
 AS
 BEGIN
-	
-	-- Actualizar solicitudes expiradas
-         	UPDATE tbl_solicitud
-			set estado = 3
-			WHERE 
-				fecha_expiracion < GETDATE() 
-				and
-				estado = 0;		
-END
+    BEGIN TRY
+        -- Actualizar solicitudes expiradas
+        UPDATE tbl_solicitud
+        SET estado = 'Expirada'
+        WHERE fecha_expiracion < GETDATE()
+        AND estado = 'Pendiente';
+    END TRY
+    BEGIN CATCH
+        PRINT ERROR_MESSAGE();
+    END CATCH
+END;
 GO
 
 
@@ -942,12 +944,12 @@ CREATE OR ALTER PROCEDURE sp_cancelar_solicitud
 AS
 BEGIN
     BEGIN TRY
-        -- Verificar si la solicitud existe y está pendiente
+        -- Verificar si la solicitud existe y está en estado 'Pendiente'
         IF NOT EXISTS (
             SELECT 1 
             FROM tbl_solicitud 
             WHERE id_solicitud = @id_solicitud 
-            AND estado = 0
+            AND estado = 'Pendiente'
         )
         BEGIN
             SET @mensaje = 'La solicitud no existe o ya no está pendiente.';
@@ -956,7 +958,7 @@ BEGIN
 
         -- Cancelar la solicitud
         UPDATE tbl_solicitud
-        SET estado = 2,
+        SET estado = 'Cancelada',
             fecha_procesamiento = GETDATE()
         WHERE id_solicitud = @id_solicitud;
 
@@ -967,6 +969,7 @@ BEGIN
     END CATCH
 END;
 GO
+
 
 -- Procedimiento para consultar solicitudes de un usuario
 CREATE OR ALTER PROCEDURE sp_consultar_solicitudes_usuario
@@ -1182,4 +1185,3 @@ exec sp_procesar_solicitud 1
 -- Devolver libro
 --EXEC sp_devolver_libro 2;
 EXEC sp_devolver_libro 2, 'nuevo mensaje';
-

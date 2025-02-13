@@ -656,7 +656,7 @@ GO
 
 -- Procedimiento para consultar todos los préstamos
 CREATE OR ALTER PROCEDURE sp_consultar_prestamos
-    @estado TINYINT = NULL -- Parámetro opcional para filtrar por estado
+    @estado VARCHAR(20) = NULL -- Parámetro opcional para filtrar por estado
 AS
 BEGIN
     SELECT 
@@ -675,16 +675,11 @@ BEGIN
         p.fecha_prestamo,
         p.fecha_devolucion,
         p.fecha_devolucion_real,
-        CASE 
-            WHEN p.estado = 0 THEN 'Pendiente'
-            WHEN p.estado = 1 THEN 'Entregado'
-            WHEN p.estado = 2 THEN 'Libro Eliminado'
-            ELSE 'Desconocido'
-        END AS estado_prestamo,
+        p.estado AS estado_prestamo,
         -- Indicador de atraso
         CASE 
-            WHEN p.estado = 0 AND GETDATE() > p.fecha_devolucion THEN 'ATRASADO'
-            WHEN p.estado = 0 AND DATEDIFF(day, GETDATE(), p.fecha_devolucion) <= 3 THEN 'POR VENCER'
+            WHEN p.estado = 'Pendiente' AND GETDATE() > p.fecha_devolucion THEN 'ATRASADO'
+            WHEN p.estado = 'Pendiente' AND DATEDIFF(day, GETDATE(), p.fecha_devolucion) <= 3 THEN 'POR VENCER'
             ELSE ''
         END AS alerta
     FROM tbl_prestamo p
@@ -695,8 +690,8 @@ BEGIN
     WHERE (@estado IS NULL OR p.estado = @estado)
     ORDER BY 
         CASE 
-            WHEN p.estado = 0 AND GETDATE() > p.fecha_devolucion THEN 0
-            ELSE p.estado 
+            WHEN p.estado = 'Pendiente' AND GETDATE() > p.fecha_devolucion THEN 0
+            ELSE 1 
         END,
         p.fecha_prestamo DESC;
 END;

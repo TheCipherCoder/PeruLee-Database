@@ -1177,8 +1177,9 @@ PRINT @mensaje
 
 -- Consultar reservas actibva Por Usuarios
 EXEC sp_consultar_solicitudes_usuario 1001;
-exec sp_procesar_solicitud 2
+exec sp_procesar_solicitud 1
 
 -- Devolver libro
 --EXEC sp_devolver_libro 2;
 EXEC sp_devolver_libro 2, 'nuevo mensaje';
+

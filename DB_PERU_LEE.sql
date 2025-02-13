@@ -899,7 +899,7 @@ CREATE OR ALTER PROCEDURE sp_procesar_solicitud
 AS
 BEGIN
     BEGIN TRY
-        DECLARE @estado_actual TINYINT, @fecha_expiracion DATE;
+        DECLARE @estado_actual VARCHAR(20), @fecha_expiracion DATETIME;
 
         -- Verificar si la solicitud existe
         IF NOT EXISTS (SELECT 1 FROM tbl_solicitud WHERE id_solicitud = @id_solicitud)
@@ -913,21 +913,21 @@ BEGIN
         WHERE id_solicitud = @id_solicitud;
 
         -- Validar si la solicitud ya fue procesada o cancelada
-        IF @estado_actual IN (1, 2)
+        IF @estado_actual IN ('Procesada', 'Cancelada')
         BEGIN
             THROW 50002, 'La solicitud ya fue procesada o cancelada.', 1;
         END
 
         -- Validar si la solicitud ha expirado
-        IF @estado_actual = 0 AND @fecha_expiracion < GETDATE()
+        IF @estado_actual = 'Pendiente' AND @fecha_expiracion < GETDATE()
         BEGIN
-			exec sp_actualizar_solicitudes;
+            EXEC sp_actualizar_solicitudes;
             THROW 50003, 'La solicitud ha expirado y no puede ser procesada.', 1;
         END
 
         -- Marcar la solicitud como procesada
         UPDATE tbl_solicitud
-        SET estado = 1, -- 1: Procesada
+        SET estado = 'Procesada', 
             fecha_procesamiento = GETDATE()
         WHERE id_solicitud = @id_solicitud;
 
@@ -981,16 +981,11 @@ BEGIN
         s.id_solicitud,
         l.titulo AS libro,
         s.fecha_solicitud,
-        CASE s.estado
-            WHEN 0 THEN 'Pendiente'
-            WHEN 1 THEN 'Procesada'
-            WHEN 2 THEN 'Cancelada'
-            WHEN 3 THEN 'Expirada'
-        END AS estado,
+        s.estado AS estado, -- Estado ya es VARCHAR(20)
         l.copias_disponibles,
         CASE 
-            WHEN s.estado = 0 AND l.copias_disponibles > 0 THEN 'Disponible para préstamo'
-            WHEN s.estado = 0 THEN 'En espera de disponibilidad'
+            WHEN s.estado = 'Pendiente' AND l.copias_disponibles > 0 THEN 'Disponible para préstamo'
+            WHEN s.estado = 'Pendiente' THEN 'En espera de disponibilidad'
             ELSE ''
         END AS observacion
     FROM tbl_solicitud s
@@ -999,6 +994,7 @@ BEGIN
     ORDER BY s.fecha_solicitud DESC;
 END;
 GO
+
 
 CREATE OR ALTER PROCEDURE sp_listar_solicitudes
     @estado VARCHAR(20) = NULL -- Parámetro opcional para filtrar por estado
@@ -1174,7 +1170,7 @@ EXEC sp_consultar_prestamos
 
 -- Consultar Prestamos Por Usuarios
 EXEC sp_consultar_prestamos_por_usuario 1002, 1;
-
+use DB_Peru_Lee
 -- Consultar reservas activas
 EXEC sp_listar_solicitudes;
 
@@ -1190,4 +1186,3 @@ exec sp_procesar_solicitud 1
 -- Devolver libro
 --EXEC sp_devolver_libro 2;
 EXEC sp_devolver_libro 2, 'nuevo mensaje';
-exec sp_listar_usuarios

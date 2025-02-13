@@ -781,18 +781,12 @@ BEGIN
             RETURN;
         END;
 
-        -- 2. Eliminar solicitudes expiradas (FIFO: solicitudes más antiguas tienen prioridad)
-        DELETE FROM tbl_solicitud
-        WHERE id_usuario_fk = @id_usuario
-        AND DATEDIFF(DAY, fecha_expiracion, GETDATE()) > 1
-        AND estado = 0;
-
-        -- 3. Verificar límite de reservas activas por usuario (máximo 5)
+        -- 2. Verificar límite de reservas activas por usuario (máximo 5)
         DECLARE @reservas_activas INT;
         SELECT @reservas_activas = COUNT(*) 
         FROM tbl_solicitud 
         WHERE id_usuario_fk = @id_usuario 
-        AND estado = 0;
+        AND estado = 'Pendiente';
 
         IF @reservas_activas >= 5
         BEGIN
@@ -801,13 +795,13 @@ BEGIN
             RETURN;
         END;
 
-        -- 4. Verificar si el usuario ya tiene una reserva activa para este libro
+        -- 3. Verificar si el usuario ya tiene una reserva activa para este libro
         IF EXISTS (
             SELECT 1 
             FROM tbl_solicitud 
             WHERE id_usuario_fk = @id_usuario 
             AND id_libro_fk = @id_libro 
-            AND estado = 0
+            AND estado = 'Pendiente'
         )
         BEGIN
             SET @mensaje = 'Ya tienes una reserva activa para este libro.';
@@ -815,13 +809,13 @@ BEGIN
             RETURN;
         END;
 
-        -- 5. Verificar si el usuario ya tiene el libro prestado
+        -- 4. Verificar si el usuario ya tiene el libro prestado
         IF EXISTS (
             SELECT 1 
             FROM tbl_prestamo 
             WHERE id_usuario_fk = @id_usuario 
             AND id_libro_fk = @id_libro 
-            AND estado = 0
+            AND estado = 'Pendiente'
         )
         BEGIN
             SET @mensaje = 'Ya tienes este libro en préstamo.';
@@ -829,11 +823,11 @@ BEGIN
             RETURN;
         END;
 
-        -- 6. Establecer fecha de expiración
+        -- 5. Establecer fecha de expiración
         DECLARE @fecha_expiracion DATETIME;
-
-        -- Verificar si hay copias disponibles
         DECLARE @copias_disponibles INT;
+
+        -- Obtener número de copias disponibles
         SELECT @copias_disponibles = copias_disponibles
         FROM tbl_libro
         WHERE id_libro = @id_libro;
@@ -849,7 +843,7 @@ BEGIN
             SELECT TOP 1 @fecha_expiracion = fecha_devolucion
             FROM tbl_prestamo
             WHERE id_libro_fk = @id_libro
-            AND estado = 0
+            AND estado = 'Pendiente'
             ORDER BY fecha_devolucion ASC;
 
             IF @fecha_expiracion IS NULL
@@ -857,12 +851,12 @@ BEGIN
                 SET @mensaje = 'No se puede determinar la fecha de expiración para la reserva.';
                 ROLLBACK;
                 RETURN;
-            END
-        END
+            END;
+        END;
 
-        -- 7. Insertar la reserva en orden FIFO
-        INSERT INTO tbl_solicitud (id_usuario_fk, id_libro_fk, fecha_solicitud, fecha_expiracion)
-        VALUES (@id_usuario, @id_libro, GETDATE(), @fecha_expiracion);
+        -- 6. Insertar la reserva
+        INSERT INTO tbl_solicitud (id_usuario_fk, id_libro_fk, fecha_solicitud, estado, fecha_expiracion)
+        VALUES (@id_usuario, @id_libro, GETDATE(), 'Pendiente', @fecha_expiracion);
 
         SET @mensaje = 'Reserva creada exitosamente. Expira el ' + 
                       FORMAT(@fecha_expiracion, 'dd/MM/yyyy HH:mm:ss');
@@ -876,6 +870,8 @@ BEGIN
     END CATCH;
 END;
 GO
+
+
 
 -- Procedimiento para actualizar solicitudes
 CREATE OR ALTER PROCEDURE sp_actualizar_solicitudes
@@ -1181,7 +1177,7 @@ PRINT @mensaje
 
 -- Consultar reservas actibva Por Usuarios
 EXEC sp_consultar_solicitudes_usuario 1001;
-exec sp_procesar_solicitud 1
+exec sp_procesar_solicitud 2
 
 -- Devolver libro
 --EXEC sp_devolver_libro 2;

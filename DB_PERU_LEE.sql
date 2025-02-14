@@ -507,7 +507,7 @@ BEGIN
         SELECT TOP 1 @id_usuario_primera_solicitud = id_usuario_fk
         FROM tbl_solicitud
         WHERE id_libro_fk = @id_libro
-        AND estado = 0 -- 0: Pendiente
+        AND estado = 'Pendiente' -- Cambio aquí
         ORDER BY fecha_solicitud;
 
         -- Si hay una solicitud pendiente, verificar si corresponde al usuario actual
@@ -524,7 +524,7 @@ BEGIN
         SELECT @prestamos_activos = COUNT(*)
         FROM tbl_prestamo
         WHERE id_usuario_fk = @id_usuario 
-        AND estado = 0; -- 0: Activo
+        AND estado = 'Pendiente'; -- Cambio aquí
 
         IF @prestamos_activos >= 5
         BEGIN
@@ -539,7 +539,7 @@ BEGIN
             FROM tbl_prestamo 
             WHERE id_usuario_fk = @id_usuario 
             AND id_libro_fk = @id_libro 
-            AND estado = 0 -- 0: Activo
+            AND estado = 'Pendiente' -- Cambio aquí
         )
         BEGIN
             SET @mensaje = 'El usuario ya tiene un préstamo activo de este libro.';
@@ -564,16 +564,16 @@ BEGIN
         IF @id_usuario_primera_solicitud = @id_usuario
         BEGIN
             UPDATE tbl_solicitud
-            SET estado = 1, -- 1: Procesada
+            SET estado = 'Procesada', -- Cambio aquí
                 fecha_procesamiento = GETDATE()
             WHERE id_usuario_fk = @id_usuario
             AND id_libro_fk = @id_libro
-            AND estado = 0; -- 0: Pendiente
+            AND estado = 'Pendiente'; -- Cambio aquí
         END
 
         -- Registrar el préstamo
         INSERT INTO tbl_prestamo (id_usuario_fk, id_libro_fk, fecha_devolucion, estado)
-        VALUES (@id_usuario, @id_libro, @fecha_devolucion, 0); -- 0: Activo
+        VALUES (@id_usuario, @id_libro, @fecha_devolucion, 'Pendiente'); -- Cambio aquí
 
         -- Actualizar copias disponibles
         UPDATE tbl_libro
@@ -1180,7 +1180,7 @@ PRINT @mensaje
 
 -- Consultar reservas actibva Por Usuarios
 EXEC sp_consultar_solicitudes_usuario 1001;
-exec sp_procesar_solicitud 1
+--exec sp_procesar_solicitud 1
 
 -- Devolver libro
 --EXEC sp_devolver_libro 2;
